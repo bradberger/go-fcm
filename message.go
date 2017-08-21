@@ -6,32 +6,45 @@ import (
 
 	"golang.org/x/net/context"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/appengine/log"
 )
 
 // Message represents fcm request message
 type Message struct {
-	Notification struct {
-		Title       string `json:"title"`
-		Body        string `json:"body"`
-		Icon        string `json:"icon"`
-		ClickAction string `json:"click_action"`
-	} `json:"notification"`
-	Priority string `json:"priority,omitempty"`
-	To       string `json:"to"`
+	Notification Notification `json:"notification"`
+	Priority     string       `json:"priority,omitempty"`
+	To           string       `json:"to"`
+}
+
+type Notification struct {
+	Title       string `json:"title"`
+	Body        string `json:"body"`
+	Icon        string `json:"icon"`
+	ClickAction string `json:"click_action"`
 }
 
 // TopicResponse is the API response when sending a message to a topic
 type TopicResponse struct {
-	MessageID string `json:"message_id"`
-	Error     string `json:"error"`
+	MessageID    int64                 `json:"message_id"`
+	MulticastID  int64                 `json:"multicast_id,omitempty"`
+	Success      int                   `json:"success,omitempty"`
+	Failure      int                   `json:"failure,omitempty"`
+	CanonicalIDs int                   `json:"canonical_ids,omitempty"`
+	Results      []TopicResponseResult `json:"results,omitempty"`
+}
+
+type TopicResponseResult struct {
+	Error string `json:"error"`
 }
 
 // Err returns the error message, if any
-func (t TopicResponse) Err() error {
-	if t.Error == "" {
-		return nil
+func (t TopicResponse) Error() error {
+	for i := range t.Results {
+		if t.Results[i].Error != "" {
+			return errors.New(t.Results[i].Error)
+		}
 	}
-	return errors.New(t.Error)
+	return nil
 }
 
 // Send sends a message
@@ -47,7 +60,10 @@ func (c *Client) Subscribe(ctx context.Context, topic string, tokens ...string) 
 	for i := range tokens {
 		eg.Go(func(token string) func() error {
 			return func() error {
-				_, err := c.Post(ctx, fmt.Sprintf("https://iid.googleapis.com/iid/v1/%s/rel/topics/%s", token, topic), nil, nil)
+				urlStr := fmt.Sprintf("https://iid.googleapis.com/iid/v1/%s/rel/topics/%s", token, topic)
+				log.Debugf(ctx, "Subscribing %s to %s", token, topic)
+				resp, err := c.Post(ctx, urlStr, nil, nil)
+				log.Debugf(ctx, "Respone: %+v", resp)
 				return err
 			}
 		}(tokens[i]))
@@ -58,9 +74,10 @@ func (c *Client) Subscribe(ctx context.Context, topic string, tokens ...string) 
 // SendTopic sends the message to the subscribers of the topic
 func (c *Client) SendTopic(ctx context.Context, m *Message) (*TopicResponse, error) {
 	var tr TopicResponse
+	log.Debugf(ctx, "Sending message: %+v", m)
 	_, err := c.Post(ctx, "https://fcm.googleapis.com/fcm/send", m, &tr)
 	if err != nil {
 		return nil, err
 	}
-	return &tr, tr.Err()
+	return &tr, tr.Error()
 }

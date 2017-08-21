@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"golang.org/x/net/context"
+	"google.golang.org/appengine/log"
 )
 
 const (
@@ -45,6 +46,10 @@ var (
 // Client stores the key and the Message (Msg)
 type Client struct {
 	APIKey string
+}
+
+type Error struct {
+	Error string `json:"error"`
 }
 
 // NotificationPayload notification message payload
@@ -95,16 +100,26 @@ func (c *Client) Do(ctx context.Context, req *http.Request, out interface{}) (*h
 		return resp, err
 	}
 	defer resp.Body.Close()
+
 	// TODO add an error type here.
+	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return resp, fmt.Errorf("error reading response body: %v", err)
+	}
+	log.Debugf(ctx, "Body: %s", string(bodyBytes))
+	resp.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
 	if resp.StatusCode >= http.StatusBadRequest {
-		bodyBytes, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			return resp, fmt.Errorf("error reading response body: %v", err)
+		var errResp Error
+		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
+			return resp, errors.New(errResp.Error)
 		}
 		return resp, errors.New(string(bodyBytes))
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return resp, err
+	if out != nil {
+		if err := json.Unmarshal(bodyBytes, out); err != nil {
+			return resp, err
+		}
 	}
 	return resp, nil
 }
@@ -112,8 +127,10 @@ func (c *Client) Do(ctx context.Context, req *http.Request, out interface{}) (*h
 // Post sends a POST request with JSON payload to the urlStr, and decodes the response into out
 func (c *Client) Post(ctx context.Context, urlStr string, data interface{}, out interface{}) (*http.Response, error) {
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(data); err != nil {
-		return nil, err
+	if data != nil {
+		if err := json.NewEncoder(&buf).Encode(data); err != nil {
+			return nil, err
+		}
 	}
 	req, err := http.NewRequest("POST", urlStr, &buf)
 	if err != nil {
